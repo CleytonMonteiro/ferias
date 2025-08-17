@@ -21,7 +21,7 @@
         }
         th {
             background-color: #f2f2f2;
-            cursor: pointer; /* Adiciona o cursor de clique para indicar que é clicável */
+            cursor: pointer;
         }
         td input, td select {
             width: 95%;
@@ -40,11 +40,55 @@
             padding: 8px 12px;
             cursor: pointer;
         }
+        .agendada-row {
+            background-color: #ffe0b2; /* Laranja claro */
+        }
+        .retirada-row {
+            background-color: #c8e6c9; /* Verde claro */
+        }
+        .em-preenchimento-row {
+            background-color: #fffac8; /* Amarelo claro */
+        }
+        .filter-container {
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        /* Classe para esconder a coluna "Ações" no PDF */
+        .hide-on-pdf {
+            display: none;
+        }
+        /* Estilos para os novos contadores */
+        .summary-container {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 10px;
+        }
+        .summary-item {
+            font-size: 1.1em;
+            font-weight: bold;
+        }
+        /* Novo estilo para o ano no título */
+        #current-year {
+            font-weight: bold;
+            color: #0056b3; /* Azul escuro */
+        }
     </style>
 </head>
 <body>
 
-    <h2>Controle de Férias de Funcionários</h2>
+    <h2 id="page-title">Controle de Férias de Funcionários <span id="current-year"></span></h2>
+
+    <div class="filter-container">
+        <label for="status-filter">Filtrar por Status:</label>
+        <select id="status-filter">
+            <option value="todos">Todos</option>
+            <option value="agendada">Agendada</option>
+            <option value="retirada">Retirada</option>
+            <option value="em preenchimento">Em preenchimento</option>
+        </select>
+    </div>
 
     <table id="vacation-table">
         <thead>
@@ -61,7 +105,16 @@
             </tbody>
     </table>
     
+    <div class="summary-container">
+        <div id="vacation-taken" class="summary-item"></div>
+        <div id="vacation-pending" class="summary-item"></div>
+    </div>
+    
     <button id="add-row-btn">Adicionar Funcionário</button>
+    <button id="generate-pdf-btn">Gerar PDF</button>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
@@ -82,8 +135,13 @@
         const tableBody = document.querySelector('#vacation-table tbody');
         const addRowBtn = document.getElementById('add-row-btn');
         const sortByStartDateBtn = document.getElementById('sort-by-start-date');
+        const statusFilter = document.getElementById('status-filter');
+        const generatePdfBtn = document.getElementById('generate-pdf-btn');
+        
+        const vacationTakenDiv = document.getElementById('vacation-taken');
+        const vacationPendingDiv = document.getElementById('vacation-pending');
 
-        let isSorted = false; // Variável para controlar o estado de ordenação
+        let isSorted = false;
         
         // --- Funções principais ---
 
@@ -118,7 +176,7 @@
             }
         };
 
-        const createRow = (employee = { name: '', startDate: '', endDate: '', status: 'agendada' }, docId = null) => {
+        const createRow = (employee = { name: '', startDate: '', endDate: '', status: 'em preenchimento' }, docId = null) => {
             const newRow = document.createElement('tr');
             newRow.dataset.docId = docId;
             newRow.innerHTML = `
@@ -128,6 +186,7 @@
                 <td class="days-off-cell">${calculateDays(employee.startDate, employee.endDate)}</td>
                 <td>
                     <select class="status-select">
+                        <option value="em preenchimento" ${employee.status === 'em preenchimento' ? 'selected' : ''}>Em preenchimento</option>
                         <option value="agendada" ${employee.status === 'agendada' ? 'selected' : ''}>Agendada</option>
                         <option value="retirada" ${employee.status === 'retirada' ? 'selected' : ''}>Retirada</option>
                     </select>
@@ -136,19 +195,34 @@
             `;
 
             addEventListenersToRow(newRow);
+            if (employee.status === 'agendada') {
+                newRow.classList.add('agendada-row');
+            } else if (employee.status === 'retirada') {
+                newRow.classList.add('retirada-row');
+            } else {
+                newRow.classList.add('em-preenchimento-row');
+            }
             tableBody.appendChild(newRow);
         };
         
         const addEventListenersToRow = (row) => {
+            const employeeNameInput = row.querySelector('.employee-name');
             const startDateInput = row.querySelector('.start-date');
             const endDateInput = row.querySelector('.end-date');
             const daysOffCell = row.querySelector('.days-off-cell');
             const deleteBtn = row.querySelector('.delete-btn');
-            const inputs = row.querySelectorAll('input, select');
+            const statusSelect = row.querySelector('.status-select');
+            const otherInputs = row.querySelectorAll('input:not(.employee-name)');
+
+            employeeNameInput.addEventListener('blur', () => {
+                employeeNameInput.value = employeeNameInput.value.toUpperCase();
+                validateAndSave();
+            });
 
             const validateAndSave = () => {
                 const startDate = startDateInput.value;
                 const endDate = endDateInput.value;
+                const statusValue = statusSelect.value;
 
                 if (!startDate || !endDate) {
                     daysOffCell.textContent = 0;
@@ -167,18 +241,30 @@
                 daysOffCell.textContent = days;
 
                 const rowData = {
-                    name: row.querySelector('.employee-name').value,
+                    name: employeeNameInput.value,
                     startDate: startDate,
                     endDate: endDate,
-                    status: row.querySelector('.status-select').value
+                    status: statusValue
                 };
+                
+                row.classList.remove('agendada-row', 'retirada-row', 'em-preenchimento-row');
+                if (statusValue === 'agendada') {
+                    row.classList.add('agendada-row');
+                } else if (statusValue === 'retirada') {
+                    row.classList.add('retirada-row');
+                } else {
+                    row.classList.add('em-preenchimento-row');
+                }
+
                 saveData(rowData, row.dataset.docId);
             };
 
-            inputs.forEach(input => {
+            otherInputs.forEach(input => {
                 input.addEventListener('change', validateAndSave);
                 input.addEventListener('keyup', validateAndSave);
             });
+
+            statusSelect.addEventListener('change', validateAndSave);
 
             deleteBtn.addEventListener('click', () => {
                 deleteData(row.dataset.docId);
@@ -186,42 +272,105 @@
             });
         };
 
-        // --- Funções de Carregamento e Ordenação ---
-
-        const loadData = (sortBy = 'startDate') => {
-            let query = db.collection('vacations');
-
-            // Adiciona a ordenação à consulta do Firebase
-            query = query.orderBy(sortBy, 'asc');
-
-            query.onSnapshot((querySnapshot) => {
+        const loadData = (filterStatus = 'todos') => {
+            db.collection('vacations').onSnapshot((querySnapshot) => {
                 tableBody.innerHTML = '';
+                
+                let vacationTakenCount = 0;
+                let vacationPendingCount = 0;
+                let filteredData = [];
+
                 querySnapshot.forEach((doc) => {
-                    createRow(doc.data(), doc.id);
+                    const data = doc.data();
+                    
+                    if (data.status === 'retirada') {
+                        vacationTakenCount++;
+                    } else if (data.status === 'agendada' || data.status === 'em preenchimento') {
+                        vacationPendingCount++;
+                    }
+
+                    if (filterStatus === 'todos' || data.status === filterStatus) {
+                        filteredData.push({ data, id: doc.id });
+                    }
                 });
-                if (querySnapshot.empty) {
-                    createRow();
-                }
+
+                filteredData.forEach(item => {
+                    createRow(item.data, item.id);
+                });
+
+                vacationTakenDiv.textContent = `Tiraram férias: ${vacationTakenCount}`;
+                vacationPendingDiv.textContent = `Faltam tirar férias: ${vacationPendingCount}`;
+
             }, (error) => {
                 console.error("Erro ao carregar dados: ", error);
-                createRow();
             });
         };
 
-        // Adiciona um evento de clique no cabeçalho "Data Início" para ordenar
         sortByStartDateBtn.addEventListener('click', () => {
-            loadData('startDate');
+            loadData(statusFilter.value);
         });
 
-        // Adiciona ouvinte para o botão "Adicionar"
+        statusFilter.addEventListener('change', (e) => {
+            loadData(e.target.value);
+        });
+
         addRowBtn.addEventListener('click', () => {
-            const newRowData = { name: '', startDate: '', endDate: '', status: 'agendada' };
+            const newRowData = { name: '', startDate: '', endDate: '', status: 'em preenchimento' };
             saveData(newRowData);
         });
 
-        // Carrega os dados ordenados por padrão ao iniciar a página
+        generatePdfBtn.addEventListener('click', () => {
+            const actionHeader = document.querySelector('th.action-cell');
+            const actionCells = document.querySelectorAll('td.action-cell');
+            
+            actionHeader.classList.add('hide-on-pdf');
+            actionCells.forEach(cell => cell.classList.add('hide-on-pdf'));
+
+            const content = document.body;
+
+            html2canvas(content).then(canvas => {
+                const imgData = canvas.toDataURL('image/png');
+                const { jsPDF } = window.jspdf;
+                const doc = new jsPDF('p', 'mm', 'a4');
+
+                const imgWidth = 210;
+                const pageHeight = 297;
+                const imgHeight = canvas.height * imgWidth / canvas.width;
+                let heightLeft = imgHeight;
+                let position = 0;
+
+                doc.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+                heightLeft -= pageHeight;
+
+                while (heightLeft >= 0) {
+                    position = heightLeft - imgHeight;
+                    doc.addPage();
+                    doc.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+                    heightLeft -= pageHeight;
+                }
+
+                doc.save('Controle-de-Ferias.pdf');
+
+                actionHeader.classList.remove('hide-on-pdf');
+                actionCells.forEach(cell => cell.classList.remove('hide-on-pdf'));
+            });
+        });
+
         document.addEventListener('DOMContentLoaded', () => {
-            loadData('startDate');
+            loadData('todos');
+            
+            db.collection('vacations').get().then(snapshot => {
+                if (snapshot.empty) {
+                    createRow();
+                }
+            }).catch(error => {
+                console.error("Erro ao verificar a coleção: ", error);
+                createRow();
+            });
+
+            const currentYearSpan = document.getElementById('current-year');
+            const currentYear = new Date().getFullYear();
+            currentYearSpan.textContent = `(${currentYear})`;
         });
     </script>
 </body>
