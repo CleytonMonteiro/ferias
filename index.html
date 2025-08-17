@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Controle de Férias com Firebase</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        th {
+            background-color: #f2f2f2;
+            cursor: pointer; /* Adiciona o cursor de clique para indicar que é clicável */
+        }
+        td input, td select {
+            width: 95%;
+            box-sizing: border-box;
+        }
+        .action-cell {
+            text-align: center;
+        }
+        .action-btn {
+            padding: 5px 10px;
+            cursor: pointer;
+            margin: 2px;
+        }
+        #add-row-btn {
+            margin-top: 15px;
+            padding: 8px 12px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+
+    <h2>Controle de Férias de Funcionários</h2>
+
+    <table id="vacation-table">
+        <thead>
+            <tr>
+                <th>Nome</th>
+                <th id="sort-by-start-date">Data Início</th>
+                <th>Data Final</th>
+                <th>Dias de Férias</th>
+                <th>Status</th>
+                <th class="action-cell">Ações</th>
+            </tr>
+        </thead>
+        <tbody>
+            </tbody>
+    </table>
+    
+    <button id="add-row-btn">Adicionar Funcionário</button>
+
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
+    <script>
+        // --- 1. CONFIGURAÇÕES DO FIREBASE ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyA3YXxXDbvvqxq1Mj5QKRPYW_5FM7EMrgQ",
+            authDomain: "ferias-ed05b.firebaseapp.com",
+            projectId: "ferias-ed05b",
+            storageBucket: "ferias-ed05b.firebasestorage.app",
+            messagingSenderId: "577132000120",
+            appId: "1:577132000120:web:46a5c9aec76164a4c7ce8d"
+        };
+        
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.firestore();
+
+        const tableBody = document.querySelector('#vacation-table tbody');
+        const addRowBtn = document.getElementById('add-row-btn');
+        const sortByStartDateBtn = document.getElementById('sort-by-start-date');
+
+        let isSorted = false; // Variável para controlar o estado de ordenação
+        
+        // --- Funções principais ---
+
+        const calculateDays = (startDate, endDate) => {
+            if (startDate && endDate) {
+                const start = new Date(startDate);
+                const end = new Date(endDate);
+                const diffTime = Math.abs(end - start);
+                const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
+                return diffDays;
+            }
+            return 0;
+        };
+        
+        const saveData = async (rowData, docId = null) => {
+            try {
+                if (docId) {
+                    await db.collection('vacations').doc(docId).set(rowData);
+                } else {
+                    await db.collection('vacations').add(rowData);
+                }
+            } catch (error) {
+                console.error("Erro ao salvar documento: ", error);
+            }
+        };
+
+        const deleteData = async (docId) => {
+            try {
+                await db.collection('vacations').doc(docId).delete();
+            } catch (error) {
+                console.error("Erro ao deletar documento: ", error);
+            }
+        };
+
+        const createRow = (employee = { name: '', startDate: '', endDate: '', status: 'agendada' }, docId = null) => {
+            const newRow = document.createElement('tr');
+            newRow.dataset.docId = docId;
+            newRow.innerHTML = `
+                <td><input type="text" class="employee-name" value="${employee.name}" placeholder="Nome do Funcionário"></td>
+                <td><input type="date" class="start-date" value="${employee.startDate}"></td>
+                <td><input type="date" class="end-date" value="${employee.endDate}"></td>
+                <td class="days-off-cell">${calculateDays(employee.startDate, employee.endDate)}</td>
+                <td>
+                    <select class="status-select">
+                        <option value="agendada" ${employee.status === 'agendada' ? 'selected' : ''}>Agendada</option>
+                        <option value="retirada" ${employee.status === 'retirada' ? 'selected' : ''}>Retirada</option>
+                    </select>
+                </td>
+                <td class="action-cell"><button class="action-btn delete-btn">Excluir</button></td>
+            `;
+
+            addEventListenersToRow(newRow);
+            tableBody.appendChild(newRow);
+        };
+        
+        const addEventListenersToRow = (row) => {
+            const startDateInput = row.querySelector('.start-date');
+            const endDateInput = row.querySelector('.end-date');
+            const daysOffCell = row.querySelector('.days-off-cell');
+            const deleteBtn = row.querySelector('.delete-btn');
+            const inputs = row.querySelectorAll('input, select');
+
+            const validateAndSave = () => {
+                const startDate = startDateInput.value;
+                const endDate = endDateInput.value;
+
+                if (!startDate || !endDate) {
+                    daysOffCell.textContent = 0;
+                    return;
+                }
+
+                if (new Date(startDate) > new Date(endDate)) {
+                    alert("A data de início não pode ser depois da data de fim!");
+                    startDateInput.value = '';
+                    endDateInput.value = '';
+                    daysOffCell.textContent = 0;
+                    return;
+                }
+
+                const days = calculateDays(startDate, endDate);
+                daysOffCell.textContent = days;
+
+                const rowData = {
+                    name: row.querySelector('.employee-name').value,
+                    startDate: startDate,
+                    endDate: endDate,
+                    status: row.querySelector('.status-select').value
+                };
+                saveData(rowData, row.dataset.docId);
+            };
+
+            inputs.forEach(input => {
+                input.addEventListener('change', validateAndSave);
+                input.addEventListener('keyup', validateAndSave);
+            });
+
+            deleteBtn.addEventListener('click', () => {
+                deleteData(row.dataset.docId);
+                row.remove();
+            });
+        };
+
+        // --- Funções de Carregamento e Ordenação ---
+
+        const loadData = (sortBy = 'startDate') => {
+            let query = db.collection('vacations');
+
+            // Adiciona a ordenação à consulta do Firebase
+            query = query.orderBy(sortBy, 'asc');
+
+            query.onSnapshot((querySnapshot) => {
+                tableBody.innerHTML = '';
+                querySnapshot.forEach((doc) => {
+                    createRow(doc.data(), doc.id);
+                });
+                if (querySnapshot.empty) {
+                    createRow();
+                }
+            }, (error) => {
+                console.error("Erro ao carregar dados: ", error);
+                createRow();
+            });
+        };
+
+        // Adiciona um evento de clique no cabeçalho "Data Início" para ordenar
+        sortByStartDateBtn.addEventListener('click', () => {
+            loadData('startDate');
+        });
+
+        // Adiciona ouvinte para o botão "Adicionar"
+        addRowBtn.addEventListener('click', () => {
+            const newRowData = { name: '', startDate: '', endDate: '', status: 'agendada' };
+            saveData(newRowData);
+        });
+
+        // Carrega os dados ordenados por padrão ao iniciar a página
+        document.addEventListener('DOMContentLoaded', () => {
+            loadData('startDate');
+        });
+    </script>
+</body>
+</html>
